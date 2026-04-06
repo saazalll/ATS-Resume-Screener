@@ -100,7 +100,4 @@ Built interactive SaaS-style dashboard using Streamlit
 Implemented explainable scoring system
 
 
-## 👨‍💻 Author
 
-Sajal Singhal
-B.Tech CSE | Data Science & AI Enthusiast
