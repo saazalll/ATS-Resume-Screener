@@ -202,10 +202,10 @@ def build_resume_scoring_text(data: Dict) -> str:
     return "\n".join([p for p in parts if p]).strip()
 
 
-def get_resume_builder_feedback(resume_text: str, matcher, clean_jd: str) -> Dict:
+def get_resume_builder_feedback(resume_text: str, matcher, job_description_text: str) -> Dict:
     resume_clean = clean_text(resume_text)
     prediction = matcher.predict_match(resume_clean)
-    skill_feedback = get_skill_match_details(clean_jd, resume_clean)
+    skill_feedback = get_skill_match_details(job_description_text, resume_text)
 
     return {
         "score": prediction.score_percent,

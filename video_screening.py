@@ -61,7 +61,7 @@ def screen_video_resume(video_bytes: bytes, job_description: str, video_name: st
     matcher.fit(clean_jd)
 
     prediction = matcher.predict_match(clean_transcript)
-    skills = get_skill_match_details(clean_jd, clean_transcript)
+    skills = get_skill_match_details(job_description, transcript)
 
     return {
         "transcript": transcript,

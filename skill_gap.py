@@ -1,107 +1,141 @@
-import re
-from typing import Dict, List, Set
+from typing import Dict, List, Set, Tuple
 
-
-COMMON_SKILL_SET = {
-    "python",
-    "java",
-    "c++",
-    "sql",
-    "mysql",
-    "postgresql",
-    "mongodb",
-    "aws",
-    "azure",
-    "gcp",
-    "docker",
-    "kubernetes",
-    "git",
-    "linux",
-    "tensorflow",
-    "pytorch",
-    "scikit-learn",
-    "machine",
-    "learning",
-    "artificial",
-    "intelligence",
-    "software",
-    "development",
-    "data",
-    "analysis",
-    "nlp",
-    "streamlit",
-    "flask",
-    "django",
-    "react",
-    "node",
-    "javascript",
-    "html",
-    "css",
-    "excel",
-    "tableau",
-    "powerbi",
-    "communication",
-    "leadership",
-    "problem",
-    "solving",
-    "statistics",
-}
-
-COMMON_SKILL_PHRASES = {
-    "machine learning",
-    "artificial intelligence",
-    "software development",
-    "data analysis",
-    "problem solving",
-}
-
-SKILL_ALIASES = {
-    "ai": "artificial intelligence",
-    "ml": "machine learning",
-    "machinelearning": "machine learning",
-    "artificialintelligence": "artificial intelligence",
-    "softwaredevelopment": "software development",
-}
+from sklearn.feature_extraction.text import TfidfVectorizer
+from skill_catalog import extract_tech_skills
 
 
 def _tokenize_skills(text: str) -> Set[str]:
-    text_l = text.lower()
-    matched: Set[str] = set()
-    tokens = re.findall(r"[a-zA-Z0-9+#.-]+", text_l)
-    token_set = set(tokens)
-    joined = "".join(tokens)
+    return set(extract_tech_skills(text))
 
-    # Match multi-word skills first so they appear as meaningful phrases.
-    for phrase in COMMON_SKILL_PHRASES:
-        words = phrase.split()
-        exact_phrase = bool(re.search(rf"\b{re.escape(phrase)}\b", text_l))
-        all_words_present = all(w in token_set for w in words)
-        merged_present = "".join(words) in joined
-        if exact_phrase or all_words_present or merged_present:
-            matched.add(phrase)
 
-    token_matches = {t for t in tokens if t in COMMON_SKILL_SET}
+NOISE_TERMS = {
+    "experience",
+    "experienced",
+    "knowledge",
+    "ability",
+    "candidate",
+    "candidates",
+    "requirements",
+    "requirement",
+    "responsibilities",
+    "responsibility",
+    "preferred",
+    "mandatory",
+    "must",
+    "good",
+    "strong",
+    "excellent",
+    "team",
+    "teams",
+    "project",
+    "projects",
+    "work",
+    "working",
+    "role",
+    "job",
+    "profile",
+    "plus",
+    "need",
+    "needs",
+    "needed",
+    "seeking",
+    "looking",
+    "required",
+    "require",
+    "requires",
+    "applicant",
+    "applicants",
+    "skills",
+    "skill",
+    "tools",
+    "year",
+    "years",
+    "patient",
+    "care",
+}
 
-    # Map shorthand/merged variants to canonical phrase skills.
-    for token in token_set:
-        if token in SKILL_ALIASES:
-            matched.add(SKILL_ALIASES[token])
 
-    # If a phrase is present, suppress its component single-word tokens.
-    phrase_parts = set()
-    for phrase in matched:
-        phrase_parts.update(phrase.split())
-    token_matches -= phrase_parts
+def _is_noisy_term(term: str) -> bool:
+    parts = [p for p in term.split() if p]
+    if not parts:
+        return True
+    if all(p in NOISE_TERMS for p in parts):
+        return True
+    if len(parts) == 1 and len(parts[0]) <= 2:
+        return True
+    if len(parts) == 1 and parts[0] in NOISE_TERMS:
+        return True
+    return False
 
-    return matched | token_matches
+
+def _extract_dynamic_keywords(jd_text: str, resume_text: str, max_terms: int = 35) -> Tuple[Set[str], Set[str]]:
+    """
+    Extract dynamic keywords from JD/resume with TF-IDF so non-catalog terms
+    can still be matched (for cross-domain usage).
+    """
+    jd = (jd_text or "").strip().lower()
+    resume = (resume_text or "").strip().lower()
+    if not jd or not resume:
+        return set(), set()
+
+    try:
+        vectorizer = TfidfVectorizer(
+            stop_words="english",
+            ngram_range=(1, 1),
+            token_pattern=r"(?u)\b[a-zA-Z][a-zA-Z0-9+#.-]{1,}\b",
+        )
+        matrix = vectorizer.fit_transform([jd, resume])
+    except ValueError:
+        return set(), set()
+
+    features = vectorizer.get_feature_names_out()
+    jd_scores = matrix[0].toarray().ravel()
+    resume_scores = matrix[1].toarray().ravel()
+
+    def _top_terms(scores) -> Set[str]:
+        ranked = scores.argsort()[::-1]
+        out: List[str] = []
+        for idx in ranked:
+            score = float(scores[idx])
+            if score <= 0:
+                break
+            term = features[idx].strip(" .,-_")
+            if not term or _is_noisy_term(term):
+                continue
+            if len(term) < 4:
+                continue
+            out.append(term)
+            if len(out) >= max_terms:
+                break
+        return set(out)
+
+    return _top_terms(jd_scores), _top_terms(resume_scores)
 
 
 def get_skill_match_details(job_description_clean: str, resume_clean: str) -> Dict[str, List[str]]:
-    jd_skills = _tokenize_skills(job_description_clean)
-    resume_skills = _tokenize_skills(resume_clean)
+    jd_text = job_description_clean or ""
+    resume_text = resume_clean or ""
 
-    matched = sorted(jd_skills & resume_skills)
-    missing = sorted(jd_skills - resume_skills)
+    jd_catalog = _tokenize_skills(jd_text)
+    resume_catalog = _tokenize_skills(resume_text)
+
+    jd_dynamic, resume_dynamic = _extract_dynamic_keywords(jd_text, resume_text)
+
+    jd_terms = jd_catalog | jd_dynamic
+    resume_terms = resume_catalog | resume_dynamic
+
+    # Keep dynamic terms as fallback only when not already captured in catalog.
+    # This preserves literal catalog matches while still allowing non-catalog
+    # keywords to match consistently.
+    jd_terms = {t for t in jd_terms if t}
+    resume_terms = {t for t in resume_terms if t}
+
+    matched = sorted(jd_terms & resume_terms)
+    missing = sorted(jd_terms - resume_terms)
+
+    # Keep output readable in UI.
+    matched = matched[:35]
+    missing = missing[:35]
 
     return {
         "matched_skills": matched,

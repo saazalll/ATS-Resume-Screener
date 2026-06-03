@@ -2,67 +2,19 @@ import re
 from collections import Counter
 from typing import Dict, List, Tuple
 
+from skill_catalog import SOFT_SKILLS, TECH_SKILLS, extract_soft_skills, extract_tech_skills
 
-TECH_PHRASES = [
-    "machine learning",
-    "data science",
-    "artificial intelligence",
-    "natural language processing",
-    "deep learning",
-    "computer vision",
-    "data analysis",
-    "data engineering",
-    "power bi",
-    "scikit-learn",
-    "streamlit",
-    "tableau",
-    "postgresql",
-    "mysql",
-    "mongodb",
-    "pytorch",
-    "tensorflow",
-    "python",
-    "java",
-    "sql",
-    "aws",
-    "azure",
-    "gcp",
-    "docker",
-    "kubernetes",
-    "rag",
-    "faiss",
-    "transformers",
-]
-
-SOFT_PHRASES = [
-    "communication",
-    "leadership",
-    "problem solving",
-    "critical thinking",
-    "collaboration",
-    "teamwork",
-    "stakeholder management",
-    "adaptability",
-    "time management",
-    "attention to detail",
-]
+TECH_PHRASES = TECH_SKILLS
+SOFT_PHRASES = SOFT_SKILLS
 
 
 def _normalize(text: str) -> str:
     return re.sub(r"\s+", " ", text.lower()).strip()
 
 
-def _extract_matches(text: str, phrases: List[str]) -> List[str]:
-    text_l = _normalize(text)
-    matches = []
-    for phrase in phrases:
-        if re.search(rf"\b{re.escape(phrase)}\b", text_l):
-            matches.append(phrase)
-    return sorted(set(matches))
-
-
 def _extract_top_terms(text: str, limit: int = 10) -> List[str]:
-    tokens = re.findall(r"[a-zA-Z][a-zA-Z0-9+#.-]+", text.lower())
+    raw_tokens = re.findall(r"[a-zA-Z][a-zA-Z0-9+#.-]*", text.lower())
+    tokens = [t.strip(" .,-_") for t in raw_tokens if t.strip(" .,-_")]
     stop = {
         "with",
         "from",
@@ -90,23 +42,64 @@ def _extract_top_terms(text: str, limit: int = 10) -> List[str]:
         "into",
         "role",
         "job",
+        "must",
+        "preferred",
+        "candidate",
+        "requirements",
+        "requirement",
+        "responsibilities",
+        "experience",
+        "skills",
+        "strong",
+        "need",
+        "needed",
+        "seeking",
+        "looking",
+        "required",
+        "require",
+        "candidate",
     }
-    filt = [t for t in tokens if t not in stop and len(t) > 2]
+    filt = [t for t in tokens if t not in stop and len(t) > 3]
     freq = Counter(filt)
     return [w for w, _ in freq.most_common(limit)]
 
 
+def _remove_phrase_parts(terms: List[str]) -> List[str]:
+    phrase_parts = {part for term in terms if " " in term for part in term.split()}
+    out = []
+    for term in terms:
+        if " " not in term and term in phrase_parts:
+            continue
+        out.append(term)
+    return out
+
+
 def _collect_user_skills(data: Dict) -> List[str]:
-    values = []
-    values.extend([s.strip().lower() for s in str(data.get("skills_csv", "")).split(",") if s.strip()])
+    chunks: List[str] = []
+    chunks.append(str(data.get("skills_csv", "")))
+    chunks.append(str(data.get("summary", "")))
+    chunks.append(str(data.get("certifications_csv", "")))
 
     for row in data.get("project_rows", []):
-        values.extend([s.strip().lower() for s in str(row.get("Tech", "")).split(",") if s.strip()])
+        chunks.append(str(row.get("Project", "")))
+        chunks.append(str(row.get("Tech", "")))
+        chunks.append(str(row.get("Details", "")))
 
     for row in data.get("experience_rows", []):
-        values.extend(re.findall(r"[a-zA-Z][a-zA-Z0-9+#.-]+", str(row.get("Achievements", "")).lower()))
+        chunks.append(str(row.get("Role", "")))
+        chunks.append(str(row.get("Company", "")))
+        chunks.append(str(row.get("Achievements", "")))
 
-    return sorted(set(values))
+    all_text = " ".join(chunks)
+    catalog_terms = extract_tech_skills(all_text)
+    fallback_terms = _extract_top_terms(all_text, limit=60)
+    combined = []
+    seen = set()
+    for term in catalog_terms + fallback_terms:
+        if term not in seen:
+            combined.append(term)
+            seen.add(term)
+    return _remove_phrase_parts(combined)
 
 
 def _pick_project_for_summary(project_rows: List[Dict], jd_tech: List[str]) -> Tuple[str, str]:
@@ -191,16 +184,21 @@ def _rewrite_star_experience(data: Dict, jd_tech: List[str], jd_soft: List[str])
 
 def generate_smart_builder_suggestions(user_data: Dict, job_description: str) -> Dict:
     jd = job_description or ""
-    jd_tech = _extract_matches(jd, TECH_PHRASES)
-    jd_soft = _extract_matches(jd, SOFT_PHRASES)
-    if not jd_tech:
-        jd_tech = _extract_top_terms(jd, limit=8)
+    jd_tech = extract_tech_skills(jd)
+    jd_soft = extract_soft_skills(jd)
+    if len(jd_tech) < 8:
+        fallback_terms = _extract_top_terms(jd, limit=20)
+        combined = []
+        seen = set()
+        for term in jd_tech + fallback_terms:
+            if term not in seen:
+                combined.append(term)
+                seen.add(term)
+        jd_tech = _remove_phrase_parts(combined)[:12]
 
-    user_skills = _collect_user_skills(user_data)
-    user_skill_text = " ".join(user_skills)
-
-    matched = [s for s in jd_tech if s in user_skill_text]
-    recommended = [s for s in jd_tech if s not in user_skill_text][:12]
+    user_skills = set(_collect_user_skills(user_data))
+    matched = [s for s in jd_tech if s in user_skills]
+    recommended = [s for s in jd_tech if s not in user_skills][:12]
 
     summary = _build_summary(user_data, jd_tech)
     star_block = _rewrite_star_experience(user_data, jd_tech, jd_soft)
