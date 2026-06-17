@@ -3,6 +3,12 @@ from typing import Optional
 
 import pdfplumber
 
+try:
+    from pdf2image import convert_from_bytes
+    import pytesseract
+    OCR_AVAILABLE = True
+except ImportError:
+    OCR_AVAILABLE = False
 
 def extract_text_from_pdf(pdf_bytes: bytes) -> str:
     """Extract raw text from PDF bytes using pdfplumber."""
@@ -12,7 +18,21 @@ def extract_text_from_pdf(pdf_bytes: bytes) -> str:
             page_text = page.extract_text() or ""
             if page_text.strip():
                 text_chunks.append(page_text)
-    return "\n".join(text_chunks).strip()
+    
+    extracted_text = "\n".join(text_chunks).strip()
+    
+    if not extracted_text and OCR_AVAILABLE:
+        try:
+            images = convert_from_bytes(pdf_bytes)
+            ocr_text = []
+            for image in images:
+                text = pytesseract.image_to_string(image)
+                ocr_text.append(text)
+            extracted_text = "\n".join(ocr_text).strip()
+        except Exception:
+            pass
+            
+    return extracted_text
 
 
 def extract_text_from_uploaded_file(uploaded_file) -> str:

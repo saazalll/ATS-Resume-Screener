@@ -12,56 +12,7 @@ def _normalize(text: str) -> str:
     return re.sub(r"\s+", " ", text.lower()).strip()
 
 
-def _extract_top_terms(text: str, limit: int = 10) -> List[str]:
-    raw_tokens = re.findall(r"[a-zA-Z][a-zA-Z0-9+#.-]*", text.lower())
-    tokens = [t.strip(" .,-_") for t in raw_tokens if t.strip(" .,-_")]
-    stop = {
-        "with",
-        "from",
-        "that",
-        "this",
-        "have",
-        "will",
-        "your",
-        "their",
-        "using",
-        "ability",
-        "strong",
-        "experience",
-        "knowledge",
-        "skills",
-        "skill",
-        "years",
-        "year",
-        "for",
-        "and",
-        "the",
-        "you",
-        "are",
-        "our",
-        "into",
-        "role",
-        "job",
-        "must",
-        "preferred",
-        "candidate",
-        "requirements",
-        "requirement",
-        "responsibilities",
-        "experience",
-        "skills",
-        "strong",
-        "need",
-        "needed",
-        "seeking",
-        "looking",
-        "required",
-        "require",
-        "candidate",
-    }
-    filt = [t for t in tokens if t not in stop and len(t) > 3]
-    freq = Counter(filt)
-    return [w for w, _ in freq.most_common(limit)]
+from keyword_utils import extract_dynamic_keywords
 
 
 def _remove_phrase_parts(terms: List[str]) -> List[str]:
@@ -74,7 +25,7 @@ def _remove_phrase_parts(terms: List[str]) -> List[str]:
     return out
 
 
-def _collect_user_skills(data: Dict) -> List[str]:
+def _collect_user_skills(data: Dict, fallback_terms: set) -> List[str]:
     chunks: List[str] = []
     chunks.append(str(data.get("skills_csv", "")))
     chunks.append(str(data.get("summary", "")))
@@ -92,14 +43,13 @@ def _collect_user_skills(data: Dict) -> List[str]:
 
     all_text = " ".join(chunks)
     catalog_terms = extract_tech_skills(all_text)
-    fallback_terms = _extract_top_terms(all_text, limit=60)
     combined = []
     seen = set()
-    for term in catalog_terms + fallback_terms:
+    for term in catalog_terms + list(fallback_terms):
         if term not in seen:
             combined.append(term)
             seen.add(term)
-    return _remove_phrase_parts(combined)
+    return _remove_phrase_parts(combined), all_text
 
 
 def _pick_project_for_summary(project_rows: List[Dict], jd_tech: List[str]) -> Tuple[str, str]:
@@ -186,17 +136,36 @@ def generate_smart_builder_suggestions(user_data: Dict, job_description: str) ->
     jd = job_description or ""
     jd_tech = extract_tech_skills(jd)
     jd_soft = extract_soft_skills(jd)
+    
+    # First, collect all user text to run shared TF-IDF
+    chunks: List[str] = []
+    chunks.append(str(user_data.get("skills_csv", "")))
+    chunks.append(str(user_data.get("summary", "")))
+    chunks.append(str(user_data.get("certifications_csv", "")))
+    for row in user_data.get("project_rows", []):
+        chunks.append(str(row.get("Project", "")))
+        chunks.append(str(row.get("Tech", "")))
+        chunks.append(str(row.get("Details", "")))
+    for row in user_data.get("experience_rows", []):
+        chunks.append(str(row.get("Role", "")))
+        chunks.append(str(row.get("Company", "")))
+        chunks.append(str(row.get("Achievements", "")))
+    all_user_text = " ".join(chunks)
+
+    jd_dynamic, resume_dynamic = extract_dynamic_keywords(jd, all_user_text)
+
     if len(jd_tech) < 8:
-        fallback_terms = _extract_top_terms(jd, limit=20)
         combined = []
         seen = set()
-        for term in jd_tech + fallback_terms:
+        for term in jd_tech + list(jd_dynamic):
             if term not in seen:
                 combined.append(term)
                 seen.add(term)
         jd_tech = _remove_phrase_parts(combined)[:12]
 
-    user_skills = set(_collect_user_skills(user_data))
+    user_skills_list, _ = _collect_user_skills(user_data, resume_dynamic)
+    user_skills = set(user_skills_list)
+    
     matched = [s for s in jd_tech if s in user_skills]
     recommended = [s for s in jd_tech if s not in user_skills][:12]
 

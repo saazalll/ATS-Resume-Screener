@@ -38,10 +38,11 @@ def clean_text(text: str) -> str:
         return ""
 
     text = text.lower()
-    text = re.sub(r"[^a-z0-9\s]", " ", text)
-    text = re.sub(r"\s+", " ", text).strip()
+    # Preserve +, #, ., - inside tokens (e.g. c++, node.js)
+    # Replaced trailing \b with a non-capturing group that allows the token to end in +, #, or a word character
+    tokens = re.findall(r"(?u)\b[a-z](?:[a-z0-9+#.-]*[a-z0-9+#])?", text)
 
     sw = _get_stopwords()
-    tokens = [tok for tok in text.split() if tok not in sw and len(tok) > 1]
+    filtered_tokens = [tok for tok in tokens if tok not in sw and len(tok) > 1]
 
-    return " ".join(tokens)
+    return " ".join(filtered_tokens)

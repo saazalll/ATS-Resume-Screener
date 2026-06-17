@@ -2,8 +2,11 @@ import io
 import textwrap
 from typing import Dict, List
 
-import matplotlib.pyplot as plt
-from matplotlib.backends.backend_pdf import PdfPages
+from reportlab.lib.pagesizes import A4
+from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
+from reportlab.platypus import SimpleDocTemplate, Paragraph, Spacer, Table, TableStyle
+from reportlab.lib import colors
+from reportlab.lib.enums import TA_CENTER, TA_RIGHT
 
 from skill_gap import get_skill_match_details
 from text_cleaner import clean_text
@@ -207,77 +210,29 @@ def get_resume_builder_feedback(resume_text: str, matcher, job_description_text:
     prediction = matcher.predict_match(resume_clean)
     skill_feedback = get_skill_match_details(job_description_text, resume_text)
 
+    hard = skill_feedback.get("hard_score", 0.0)
+    soft = skill_feedback.get("soft_score", 0.0)
+    semantic = prediction.semantic_score
+    overall_score = round((0.50 * semantic) + (0.35 * hard) + (0.15 * soft), 2)
+    label = "Matched" if overall_score >= 50 else "Not Matched"
+
     return {
-        "score": prediction.score_percent,
-        "label": prediction.label,
+        "score": overall_score,
+        "semantic_score": semantic,
+        "hard_skills_score": hard,
+        "soft_skills_score": soft,
+        "label": label,
         "matched_skills": skill_feedback["matched_skills"],
         "missing_skills": skill_feedback["missing_skills"],
+        "organizations": skill_feedback.get("organizations", []),
+        "dates": skill_feedback.get("dates", [])
     }
-
-
-def _wrap(text: str, width: int) -> List[str]:
-    if not text.strip():
-        return []
-    return textwrap.wrap(text.strip(), width=width)
-
-
-PRIMARY_TEXT = "#000000"
-MUTED_TEXT = "#64748B"
-RULE_COLOR = "#CBD5E1"
-
-
-def _section_header(ax, y: float, title: str) -> float:
-    ax.text(0.06, y, title.upper(), fontsize=10.8, fontweight="bold", color=PRIMARY_TEXT, va="top", family="DejaVu Sans")
-    y -= 0.012
-    ax.plot([0.06, 0.94], [y, y], color=RULE_COLOR, linewidth=0.85)
-    return y - 0.012
-
-
-def _draw_wrapped(ax, x: float, y: float, text: str, width: int, size: float, color: str, weight: str = "normal") -> float:
-    for line in _wrap(text, width):
-        ax.text(x, y, line, fontsize=size, color=color, va="top", family="DejaVu Sans", fontweight=weight)
-        y -= 0.013
-    return y
-
-
-def _draw_timeline_entry(
-    ax,
-    y: float,
-    left_title: str,
-    left_subtitle: str,
-    right_meta: str,
-    bullets: List[str],
-    cgpa: str = "",
-) -> float:
-    if left_title:
-        ax.text(0.06, y, left_title, fontsize=10.2, color=PRIMARY_TEXT, va="top", family="DejaVu Sans", fontweight="bold")
-    if right_meta:
-        ax.text(0.94, y, right_meta, fontsize=9, color=MUTED_TEXT, va="top", ha="right", family="DejaVu Sans")
-    y -= 0.014
-
-    if left_subtitle:
-        y = _draw_wrapped(ax, 0.06, y, left_subtitle, width=80, size=9.3, color=PRIMARY_TEXT, weight="bold")
-
-    if cgpa:
-        ax.text(0.06, y, f"CGPA: {cgpa}", fontsize=9.3, color=PRIMARY_TEXT, va="top", family="DejaVu Sans", fontweight="bold")
-        y -= 0.0135
-
-    for bullet in bullets:
-        bullet_lines = _wrap(bullet, 106)
-        if not bullet_lines:
-            continue
-        ax.text(0.065, y, f"• {bullet_lines[0]}", fontsize=8.8, color=PRIMARY_TEXT, va="top", family="DejaVu Sans")
-        y -= 0.0126
-        for more in bullet_lines[1:]:
-            ax.text(0.083, y, more, fontsize=8.8, color=PRIMARY_TEXT, va="top", family="DejaVu Sans")
-            y -= 0.0126
-
-    return y - 0.007
 
 
 def build_resume_pdf_bytes(data: Dict) -> bytes:
     """
     Generate a professional high-contrast resume PDF with timeline structure.
+    Using ReportLab for proper pagination.
     """
     name = str(data.get("name", "")).strip() or "Your Name"
     email = str(data.get("email", "")).strip()
@@ -291,162 +246,154 @@ def build_resume_pdf_bytes(data: Dict) -> bytes:
     certifications = _split_csv(str(data.get("certifications_csv", "")))
 
     out = io.BytesIO()
-    with PdfPages(out) as pdf:
-        fig = plt.figure(figsize=(8.27, 11.69))
-        ax = fig.add_axes([0, 0, 1, 1])
-        ax.set_xlim(0, 1)
-        ax.set_ylim(0, 1)
-        ax.axis("off")
+    
+    doc = SimpleDocTemplate(out, pagesize=A4, rightMargin=30, leftMargin=30, topMargin=30, bottomMargin=30)
+    story = []
+    
+    styles = getSampleStyleSheet()
+    title_style = ParagraphStyle('Title', parent=styles['Heading1'], alignment=TA_CENTER, fontSize=22, spaceAfter=6, textColor="#000000")
+    contact_style = ParagraphStyle('Contact', parent=styles['Normal'], alignment=TA_CENTER, fontSize=9, spaceAfter=2, textColor="#000000")
+    heading_style = ParagraphStyle('Heading', parent=styles['Heading2'], fontSize=11, spaceAfter=6, textColor="#000000", borderPadding=(0,0,2,0), borderWidth=1, borderColor="#CBD5E1")
+    normal_style = ParagraphStyle('Normal', parent=styles['Normal'], fontSize=9, spaceAfter=4, textColor="#000000")
+    bold_style = ParagraphStyle('Bold', parent=styles['Normal'], fontSize=9, spaceAfter=2, textColor="#000000", fontName='Helvetica-Bold')
+    bullet_style = ParagraphStyle('Bullet', parent=styles['Normal'], fontSize=9, spaceAfter=2, leftIndent=15, textColor="#000000", bulletIndent=5)
+    subhead_style = ParagraphStyle('Subhead', parent=styles['Normal'], fontSize=9.5, spaceAfter=4, textColor="#000000", fontName='Helvetica-Bold')
+    meta_style = ParagraphStyle('Meta', parent=styles['Normal'], fontSize=9, spaceAfter=4, textColor="#64748B", alignment=TA_RIGHT)
 
-        ax.text(0.5, 0.967, name, fontsize=22, fontweight="bold", color=PRIMARY_TEXT, ha="center", family="DejaVu Sans")
-        contact_line = " | ".join([x for x in [email, phone, location] if x])
-        links_line = " | ".join([x for x in [linkedin, portfolio] if x])
-        if contact_line:
-            ax.text(0.5, 0.943, contact_line, fontsize=9.1, color=PRIMARY_TEXT, ha="center", family="DejaVu Sans")
-        if links_line:
-            ax.text(0.5, 0.927, links_line, fontsize=8.9, color=PRIMARY_TEXT, ha="center", family="DejaVu Sans")
+    story.append(Paragraph(name, title_style))
+    
+    contact_line = " | ".join([x for x in [email, phone, location] if x])
+    links_line = " | ".join([x for x in [linkedin, portfolio] if x])
+    if contact_line:
+        story.append(Paragraph(contact_line, contact_style))
+    if links_line:
+        story.append(Paragraph(links_line, contact_style))
+        
+    story.append(Spacer(1, 10))
 
-        ax.plot([0.06, 0.94], [0.912, 0.912], color=RULE_COLOR, linewidth=1.0)
-        y = 0.895
+    if summary:
+        story.append(Paragraph("PROFESSIONAL SUMMARY", heading_style))
+        story.append(Paragraph(summary, normal_style))
+        story.append(Spacer(1, 5))
 
-        if summary:
-            y = _section_header(ax, y, "Professional Summary")
-            y = _draw_wrapped(ax, 0.06, y, summary, width=118, size=9.1, color=PRIMARY_TEXT)
-            y -= 0.004
+    if skills:
+        story.append(Paragraph("SKILLS", heading_style))
+        dense_skills = " | ".join([s.strip() for s in skills if s.strip()])
+        story.append(Paragraph(dense_skills, normal_style))
+        story.append(Spacer(1, 5))
 
-        if skills:
-            y = _section_header(ax, y, "Skills")
-            dense_skills = " | ".join([s.strip() for s in skills if s.strip()])
-            y = _draw_wrapped(ax, 0.06, y, dense_skills, width=122, size=9.0, color=PRIMARY_TEXT)
-            y -= 0.004
+    # Helper function to create timeline header with Table
+    def _timeline_header(left_text, right_text):
+        if not right_text:
+            story.append(Paragraph(left_text, bold_style))
+            return
+            
+        left_p = Paragraph(left_text, bold_style)
+        right_p = Paragraph(right_text, meta_style)
+        
+        # We use a Table to align the text. We have roughly 535 points of width (A4 width - 60 points margin).
+        # We can give 70% to left and 30% to right
+        t = Table([[left_p, right_p]], colWidths=['70%', '30%'])
+        t.setStyle(TableStyle([
+            ('VALIGN', (0,0), (-1,-1), 'TOP'),
+            ('LEFTPADDING', (0,0), (-1,-1), 0),
+            ('RIGHTPADDING', (0,0), (-1,-1), 0),
+            ('TOPPADDING', (0,0), (-1,-1), 0),
+            ('BOTTOMPADDING', (0,0), (-1,-1), 0),
+        ]))
+        story.append(t)
+        story.append(Spacer(1, 2))
 
-        # Education timeline
-        education_rows = data.get("education_rows", [])
-        if education_rows:
-            y = _section_header(ax, y, "Education")
-            for row in education_rows:
-                degree = str(row.get("Degree", "")).strip()
-                institute = str(row.get("Institute", "")).strip()
-                year = str(row.get("Year", "")).strip()
-                edu_loc = str(row.get("Location", "")).strip()
-                cgpa = str(row.get("CGPA", "")).strip()
-                if not any([degree, institute, year, edu_loc, cgpa]):
-                    continue
-                right_meta = " | ".join([x for x in [year, edu_loc] if x])
-                y = _draw_timeline_entry(
-                    ax,
-                    y=y,
-                    left_title=degree,
-                    left_subtitle=institute,
-                    right_meta=right_meta,
-                    bullets=[],
-                    cgpa=cgpa,
-                )
+    education_rows = data.get("education_rows", [])
+    if education_rows:
+        story.append(Paragraph("EDUCATION", heading_style))
+        for row in education_rows:
+            degree = str(row.get("Degree", "")).strip()
+            institute = str(row.get("Institute", "")).strip()
+            year = str(row.get("Year", "")).strip()
+            edu_loc = str(row.get("Location", "")).strip()
+            cgpa = str(row.get("CGPA", "")).strip()
+            if not any([degree, institute, year, edu_loc, cgpa]):
+                continue
+            
+            right_meta = " | ".join([x for x in [year, edu_loc] if x])
+            _timeline_header(f"<b>{degree}</b>", right_meta)
+            if institute:
+                story.append(Paragraph(institute, normal_style))
+            if cgpa:
+                story.append(Paragraph(f"<b>CGPA:</b> {cgpa}", normal_style))
+            story.append(Spacer(1, 5))
 
-        # Experience timeline (distinct groups)
-        experience_rows = data.get("experience_rows", [])
-        if experience_rows:
-            internships = []
-            simulations = []
-            others = []
-            for row in experience_rows:
-                exp_type = str(row.get("Type", "")).strip().lower()
-                role = str(row.get("Role", "")).strip()
-                company = str(row.get("Company", "")).strip()
-                duration = str(row.get("Duration", "")).strip()
-                exp_loc = str(row.get("Location", "")).strip()
-                bullets = _non_empty_lines(str(row.get("Achievements", "")).strip())
-                if not any([exp_type, role, company, duration, exp_loc, bullets]):
-                    continue
-                entry = {
-                    "role": role,
-                    "company": company,
-                    "meta": " | ".join([x for x in [duration, exp_loc] if x]),
-                    "bullets": bullets,
-                }
-                if "simulation" in exp_type:
-                    simulations.append(entry)
-                elif "intern" in exp_type:
-                    internships.append(entry)
-                else:
-                    others.append(entry)
+    experience_rows = data.get("experience_rows", [])
+    if experience_rows:
+        internships = []
+        simulations = []
+        others = []
+        for row in experience_rows:
+            exp_type = str(row.get("Type", "")).strip().lower()
+            role = str(row.get("Role", "")).strip()
+            company = str(row.get("Company", "")).strip()
+            duration = str(row.get("Duration", "")).strip()
+            exp_loc = str(row.get("Location", "")).strip()
+            bullets = _non_empty_lines(str(row.get("Achievements", "")).strip())
+            
+            if not any([exp_type, role, company, duration, exp_loc, bullets]):
+                continue
+                
+            entry = {"role": role, "company": company, "duration": duration, "exp_loc": exp_loc, "bullets": bullets}
+            if "simulation" in exp_type:
+                simulations.append(entry)
+            elif "intern" in exp_type:
+                internships.append(entry)
+            else:
+                others.append(entry)
 
-            if internships or simulations or others:
-                y = _section_header(ax, y, "Experience")
+        if internships or simulations or others:
+            story.append(Paragraph("EXPERIENCE", heading_style))
+            
+            def _add_entries(entries_list, subtitle):
+                if not entries_list:
+                    return
+                story.append(Paragraph(subtitle, subhead_style))
+                for e in entries_list:
+                    meta = " | ".join([x for x in [e['duration'], e['exp_loc']] if x])
+                    _timeline_header(f"<b>{e['role']}</b> - {e['company']}", meta)
+                    for bullet in e['bullets']:
+                        story.append(Paragraph(f"• {bullet}", bullet_style))
+                    story.append(Spacer(1, 5))
 
-            if internships:
-                ax.text(0.06, y, "INTERNSHIPS", fontsize=9.6, fontweight="bold", color=PRIMARY_TEXT, va="top", family="DejaVu Sans")
-                y -= 0.0125
-                for e in internships:
-                    y = _draw_timeline_entry(
-                        ax,
-                        y=y,
-                        left_title=e["role"],
-                        left_subtitle=e["company"],
-                        right_meta=e["meta"],
-                        bullets=e["bullets"],
-                    )
+            _add_entries(internships, "INTERNSHIPS")
+            _add_entries(simulations, "JOB SIMULATIONS")
+            _add_entries(others, "OTHER EXPERIENCE")
 
-            if simulations:
-                ax.text(0.06, y, "JOB SIMULATIONS", fontsize=9.6, fontweight="bold", color=PRIMARY_TEXT, va="top", family="DejaVu Sans")
-                y -= 0.0125
-                for e in simulations:
-                    y = _draw_timeline_entry(
-                        ax,
-                        y=y,
-                        left_title=e["role"],
-                        left_subtitle=e["company"],
-                        right_meta=e["meta"],
-                        bullets=e["bullets"],
-                    )
+    project_rows = data.get("project_rows", [])
+    if project_rows:
+        story.append(Paragraph("PROJECTS", heading_style))
+        for row in project_rows:
+            proj = str(row.get("Project", "")).strip()
+            tech = str(row.get("Tech", "")).strip()
+            link = str(row.get("Project Link", "")).strip() or str(row.get("Link", "")).strip()
+            details_lines = _non_empty_lines(str(row.get("Details", "")).strip())
+            
+            if not any([proj, tech, link, details_lines]):
+                continue
+                
+            if proj:
+                story.append(Paragraph(f"<b>{proj}</b>", bold_style))
+            if tech:
+                skill_line = " | ".join([t.strip() for t in tech.split(",") if t.strip()]) or tech
+                story.append(Paragraph(f"<b>Key Skills:</b> {skill_line}", normal_style))
+            if link:
+                story.append(Paragraph(f"<b>Project Link:</b> {link}", normal_style))
+            for line in details_lines:
+                story.append(Paragraph(f"• {line}", bullet_style))
+            story.append(Spacer(1, 5))
 
-            if others:
-                ax.text(0.06, y, "OTHER EXPERIENCE", fontsize=9.6, fontweight="bold", color=PRIMARY_TEXT, va="top", family="DejaVu Sans")
-                y -= 0.0125
-                for e in others:
-                    y = _draw_timeline_entry(
-                        ax,
-                        y=y,
-                        left_title=e["role"],
-                        left_subtitle=e["company"],
-                        right_meta=e["meta"],
-                        bullets=e["bullets"],
-                    )
+    if certifications:
+        story.append(Paragraph("CERTIFICATES", heading_style))
+        for cert in certifications:
+            story.append(Paragraph(f"• {cert}", bullet_style))
 
-        # Projects with strong separation
-        project_rows = data.get("project_rows", [])
-        if project_rows:
-            y = _section_header(ax, y, "Projects")
-            for row in project_rows:
-                proj = str(row.get("Project", "")).strip()
-                tech = str(row.get("Tech", "")).strip()
-                link = str(row.get("Project Link", "")).strip() or str(row.get("Link", "")).strip()
-                details = " ".join(_non_empty_lines(str(row.get("Details", "")).strip()))
-                if not any([proj, tech, link, details]):
-                    continue
-
-                if proj:
-                    ax.text(0.06, y, proj, fontsize=10.2, color=PRIMARY_TEXT, va="top", family="DejaVu Sans", fontweight="bold")
-                    y -= 0.0138
-                if tech:
-                    skill_line = " | ".join([t.strip() for t in tech.split(",") if t.strip()]) or tech
-                    y = _draw_wrapped(ax, 0.06, y, f"Key Skills: {skill_line}", width=118, size=8.9, color=PRIMARY_TEXT)
-                if link:
-                    y = _draw_wrapped(ax, 0.06, y, f"Project Link: {link}", width=118, size=8.8, color=PRIMARY_TEXT)
-                if details:
-                    wrapped = _wrap(details, 118)[:3]  # keep concise 2-3 lines
-                    for line in wrapped:
-                        ax.text(0.06, y, line, fontsize=8.8, color=PRIMARY_TEXT, va="top", family="DejaVu Sans")
-                        y -= 0.0128
-                y -= 0.006
-
-        if certifications:
-            y = _section_header(ax, y, "Certificates")
-            for cert in certifications:
-                y = _draw_wrapped(ax, 0.06, y, f"• {cert}", width=118, size=8.9, color=PRIMARY_TEXT)
-
-        pdf.savefig(fig)
-        plt.close(fig)
-
+    doc.build(story)
     out.seek(0)
     return out.getvalue()
